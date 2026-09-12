@@ -1,0 +1,22 @@
+{
+  // 用项目里的 TypeScript，而不是编辑器内置的版本。
+  // 不设置这一条的后果：编辑器里显示的报错与命令行 `tsc --noEmit` 的结果不一致，
+  // 你会花时间排查一个根本不存在的 bug。
+  // 配套的 enablePromptUseWorkspaceTsdk 会在首次打开时提示切换，点「允许」。
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+
+  // 保存时自动修复可自动修复的 ESLint 问题。
+  // "explicit" 表示只在手动保存时触发，自动保存不触发。
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+
+  // 故意关闭。项目目前没有 Prettier 配置，开了会和 ESLint 的格式规则打架
+  // （两边都想格式化同一处）。等真的觉得代码风格乱了，再决定是加 Prettier
+  // 还是纯靠 ESLint。别在还没遇到问题时引入工具。
+  "editor.formatOnSave": false,
+
+  // 新文件统一用 LF，与 .gitattributes 保持一致
+  "files.eol": "\n"
+}

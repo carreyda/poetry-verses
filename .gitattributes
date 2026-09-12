@@ -1,0 +1,30 @@
+# 统一换行符：仓库内存 LF，检出到工作区也是 LF。
+#
+# 为什么需要这个文件：core.autocrlf 是「本地」配置，不随仓库走。
+# Windows 上常为 true，Linux/macOS 上多为 input 或未设置。多机克隆同一仓库时，
+# 各机器检出的换行符会不一致，典型症状是「我只改了一行，git 说改了 200 行」。
+# .gitattributes 随仓库提交，是唯一能跨机器强制统一的机制。
+* text=auto eol=lf
+
+# 二进制文件：禁止换行符转换，也不做文本 diff
+*.ico   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.avif  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.mp4   binary
+*.webm  binary
+*.pdf   binary
+
+# SVG 虽然是图片，但它是 XML 文本，按文本处理
+*.svg text eol=lf
+
+# lockfile 由工具生成，体积大且无阅读价值，不参与 diff
+pnpm-lock.yaml -diff

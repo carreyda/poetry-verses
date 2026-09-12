@@ -1,0 +1,18 @@
+{
+  // 克隆后首次打开项目时，编辑器会主动提示安装 recommendations 里的扩展。
+  "recommendations": [
+    // ESLint 实时报错。项目已有 eslint.config.mjs（flat config）
+    "dbaeumer.vscode-eslint",
+    // Tailwind CSS IntelliSense：class 名补全 + 悬停显示实际 CSS。
+    // 注意本项目用 Tailwind v4，是 CSS-first 配置（@theme），没有 tailwind.config.js
+    "bradlc.vscode-tailwindcss",
+    // 可选：把错误与警告内联显示在代码行尾，不用鼠标悬停
+    "usernamehw.errorlens"
+  ],
+
+  // 主动阻止编辑器推荐 Prettier。项目尚未引入它，装了会和 ESLint 的格式规则冲突，
+  // 原因见 settings.json 里 editor.formatOnSave 的注释。
+  "unwantedRecommendations": [
+    "esbenp.prettier-vscode"
+  ]
+}
