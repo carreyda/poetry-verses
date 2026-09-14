@@ -1,129 +1,169 @@
-# 关卡 A3 · React 进阶
+# 关卡 A3 · React 进阶（Vue 迁移视角）
 
-> ⏱ 预估 20–30 小时
-> 前置：A2 完成（含 7 道思考题）
+> ⏱ 预估 15–22 小时
+> 前置：A2 完成（含 9 道思考题）
 > 产出：一个打磨过的诗词 SPA，性能可测量、逻辑可复用、错误可兜底
 
 ---
 
 ## 1. 这一关解决什么
 
-A2 建立了五条核心规则，但留了几个伏笔：
+A2 建立了五条核心规则，讲透了闭包陷阱，也带你把 Vue 直觉里失效的地方过了一遍。但留了几个伏笔：
 
-- **stale closure** 只让你知道它存在，没教你怎么系统性对付
-- 组件拆开了，但**逻辑怎么复用**没说（组件复用 ≠ 逻辑复用）
-- 列表长了会卡，但**该不该优化、怎么优化、优化哪里**没说
-- 状态多了，`useState` 开始难管，但**什么时候换工具**没说
+- **闭包陷阱**你已经有四种解法，但**为什么 Vue 完全不需要这套机制**、`useRef` 在底层扮演什么角色，还没讲（第 2 节把它讲透，不重复解法）
+- 组件拆开了，但**逻辑怎么复用**没说。你熟悉的 composable 在 React 里有个**关键差异**，不搞清楚会写出 bug（第 6 节）
+- 列表长了会卡——因为 React **默认不做细粒度更新**。这是 Vue 给你的第二大直觉盲区（第一是快照语义），直接决定了你的优化策略（第 5 节）
+- 状态多了 `useState` 开始难管，但**什么时候换工具**没说；而且 React **没有 Pinia 的对等物**（第 7 节）
+- `useRef` 和 Vue 的 `ref()` 名字撞车，A2 提了一句，这里要讲透三个用途
 
-A3 逐个处理。另外会讲 React 19.2 真正可用的新 API——注意，**这一节我实测过**，和网上流传的说法有出入。
+A3 逐个处理。另外会讲 React 19.2 真正可用的新 API——**这一节我实测过**，和网上流传的说法（包括 Next.js 自己的升级文档）有出入。
+
 
 ---
 
-## 2. 闭包陷阱：系统性解法
+## 2. 闭包陷阱：为什么 Vue 不需要这套机制
 
-A2 规则 3 说过：一次渲染 = 一次快照，effect 和回调会捕获当次的值。现在有四种对付手段，**按优先级排列**：
+**四种解法（补依赖 / 函数式更新 / `useEffectEvent` / `useRef` 存最新值）在 A2 第 5 节已经给全了，这里不重复。** 这一节回答另一个问题：为什么 Vue 里根本不存在这个问题，React 为此付出了什么代价，以及 A2 没覆盖的两种变体。
 
-### 解法 1：补全依赖数组（首选）
+### 机制对比：可变引用 vs 常量快照
+
+Vue：
+
+```js
+const count = ref(0)
+setInterval(() => console.log(count.value), 1000)
+```
+
+`count` 是个**对象引用**，永远不变；变的只是 `.value` 这个属性。回调捕获的是那个稳定对象，每次读 `.value` 都拿到最新值。**不需要任何额外机制。**
+
+React：
 
 ```jsx
-// ❌ 捕获旧 count
+const [count, setCount] = useState(0)
 useEffect(() => {
   const t = setInterval(() => console.log(count), 1000)
   return () => clearInterval(t)
 }, [])
-
-// ✅ count 变化时重建 interval，总是最新的
-useEffect(() => {
-  const t = setInterval(() => console.log(count), 1000)
-  return () => clearInterval(t)
-}, [count])
 ```
 
-代价：effect 会重跑。对 interval 来说意味着每次重建，定时器不准。这时才需要下面的解法。
+`count` 是个**数字常量**，每次渲染都是一个全新的值。回调捕获的是"那一次渲染的那个数字"。React 没有 Proxy，无法让你的代码"自动读到最新值"。
 
-### 解法 2：函数式更新（当只依赖 state 自身时）
+### 代价：React 用三样东西换来了可中断渲染
+
+React 为什么不用 Vue 那种"可变对象 + Proxy 自动追踪"？根因见 A2 思考题 2，这里给结论：
+
+**React 需要在渲染过程中暂停、丢弃、重放组件函数**（时间切片 / 可中断渲染）。如果 state 是可变对象，重放时会读到已被修改的值，结果不可复现。把 state 设计成不可变快照，渲染就成了纯函数计算，可以随便中断重启。
+
+代价具体是：手写依赖数组、区分"快照值"与"待处理值"、必要时用 ref 显式传递最新值。**这三样都是 Vue 里不存在的概念，不是你学得不好。**
+
+### 破局的关键：引用稳定性
+
+解法 4 之所以有效，依赖 React 的一条**保证**：
+
+> **同一个组件实例的 `useRef` 返回的对象，跨渲染始终是同一个引用。**
 
 ```jsx
-// ❌ 快照问题，只加 1
-setCount(count + 1); setCount(count + 1); setCount(count + 1)
-
-// ✅ 基于待处理的最新值
-setCount(c => c + 1); setCount(c => c + 1); setCount(c => c + 1)
+const ref = useRef(0)
+// 第一次渲染：ref 是对象 A
+// 第二次渲染：ref 还是对象 A（不是新造的）
+// 变的只有 ref.current
 ```
 
+所以回调捕获这个 ref 不会过期——它捕获的是一个**稳定的容器**，而不是某个时刻的值。`useEffectEvent` 本质就是这个模式的官方封装。
+
+`useState` 返回的 `setValue` 也有同样的引用稳定性，这就是为什么它能安全地放进依赖数组而不引起循环。
+
+> 这也解释了 A2 第 7 节的另一件事：为什么 `useState` 的初始值只在首次渲染生效——因为 React 认的是"组件实例在多次渲染之间的槽位"，而不是你每次传进去的值。
+
+### A2 没覆盖的变体 1：`useCallback` 会制造同样的陷阱
+
+A2 只讲了 effect 里的闭包。**任何"在某次渲染中创建、之后才被调用"的函数都有这个问题**，包括 `useCallback` 冻结的函数。
+
 ```jsx
-// interval 里累加，不需要把 count 放进依赖
-useEffect(() => {
-  const t = setInterval(() => setCount(c => c + 1), 1000)
-  return () => clearInterval(t)
-}, [])   // ✅ 空依赖是安全的，因为没读 count
+const handleClick = useCallback(() => console.log(count), [])   // ❌ 永远打印 0
 ```
 
-**这是最常用的解法**。判据：effect 里**只写不读** state 时，空依赖是安全的。
+`[]` 意味着这个函数被冻结在首次渲染那一版，里面捕获的 `count` 永远是 0。**`useCallback` 和 `useEffect` 的依赖数组语义完全一样**，漏了依赖同样是闭包陷阱。
 
-### 解法 3：`useEffectEvent`（React 19.2 新增）
+这也是为什么第 5 节会反复强调：**`useCallback` 不是性能优化，它同时是一个正确性工具。** 用错会引入 bug，不只是"没优化到"。
 
-当 effect 需要**读取**最新值，但又不希望这个值触发 effect 重跑：
+### A2 没覆盖的变体 2：循环里创建的回调
 
 ```jsx
-import { useEffectEvent } from 'react'
+{poems.map(poem => (
+  <button onClick={() => deletePoem(poem.id)}>删除</button>
+))}
+```
 
-function ChatRoom({ roomId, theme }) {
-  const onConnected = useEffectEvent(() => {
-    // 这里读到的 roomId / theme 永远是最新的
-    showNotification('已连接到 ' + roomId, theme)
-  })
+这个写法是**对**的：每次 `map` 迭代产生独立的 `poem`，每个按钮捕获各自的 `poem`。
 
-  useEffect(() => {
-    const conn = createConnection(roomId)
-    conn.on('connected', () => onConnected())
-    conn.connect()
-    return () => conn.disconnect()
-  }, [roomId])          // ✅ theme 变化不会重连，但通知用的是最新 theme
+但换成 `for` 循环 + `var` 就错了：
+
+```jsx
+const handlers = []
+for (var i = 0; i < poems.length; i++) {
+  handlers.push(() => deletePoem(poems[i].id))   // ❌ 全部读取同一个 i
 }
 ```
 
-**语义**：`useEffectEvent` 返回的函数**不是响应式的**——它不进依赖数组，但每次调用都读最新的 props/state。
+`var` 是函数作用域，循环里共享同一个变量，回调执行时 `i` 已经是终值。用 `let`（块作用域）或直接 `map` 就没这个问题。
 
-适用场景：事件回调、日志上报、通知，即"effect 里那个不该触发重跑但要读最新值的函数"。
+> **这不是 React 特有的坑，是 JS 作用域的**。但在 React 里特别容易撞上，因为"循环生成回调 props"是极常见的模式。A2 第 9 节讲过用下标当 key 的类似问题，根因是同一个：搞错了"每次迭代/每次渲染各自独立"的边界在哪。
 
-> ⚠️ **状态提示**：我验证了 `useEffectEvent` 在 react@19.2.8 里确实已导出（`require('react').useEffectEvent` 存在）。但 React 官方文档仍标注它为 experimental，API 有变动可能。**学习期可以用，生产代码建议再观望**。用它之前先确认控制台没有警告。
+### 依赖数组的两个反面
 
-### 解法 4：`useRef` 存最新值（底层手段）
-
-`useEffectEvent` 出现之前的传统做法：
+A2 讲了"漏了会拿到旧值"。另一个反面是**多了会导致无限循环**：
 
 ```jsx
-const countRef = useRef(count)
-useEffect(() => { countRef.current = count })   // 每次渲染同步
-
 useEffect(() => {
-  const t = setInterval(() => console.log(countRef.current), 1000)
-  return () => clearInterval(t)
-}, [])   // 空依赖，但读的是 ref，总是最新
+  setItems([...items, newItem])   // items 在依赖里
+}, [items])                        // ❌ setItems → items 变 → effect 重跑 → 无限
 ```
 
-原理：ref 对象的**引用稳定**（跨渲染不变），但 `.current` 可变。所以回调捕获 ref 本身不会过期，读 `.current` 时拿到最新值。
-
-`useEffectEvent` 本质就是这个模式的封装。**理解这个手动版本，你才知道 `useEffectEvent` 在做什么。**
-
-### 四种解法的选择
-
-| 情况 | 用 |
+| 症状 | 诊断 |
 |---|---|
-| effect 重跑没副作用 | 解法 1（补依赖） |
-| effect 里只写不读 state | 解法 2（函数式更新） |
-| effect 里要读最新值但不能重跑 | 解法 3（`useEffectEvent`）或 4 |
-| 要在渲染中读跨渲染的可变值 | 解法 4（`useRef`） |
+| 行为不符合预期、拿到旧值 | 依赖**漏了** |
+| 组件疯狂重渲染、控制台刷屏、浏览器卡死 | 依赖**多了**，或 effect 里 `setState` 改了自己依赖的值 |
+
+但真正该问的不是"依赖数组怎么写"，而是"**这件事为什么需要 effect**"。绝大多数"依赖数组摆不平"的情况，根因都是它本不该用 effect（A2 第 8 节）。上面那个例子，追加元素应该发生在**事件处理器**里（用户点击时），不是 effect 里。
+
+### 自查清单
+
+- [ ] 每个 `useEffect` 的依赖数组完整吗？（ESLint `react-hooks/exhaustive-deps` 无告警）
+- [ ] 每个 `useCallback` / `useMemo` 的依赖数组完整吗？
+- [ ] 代码里有 `// eslint-disable-next-line react-hooks/exhaustive-deps` 吗？——**每一个都是一个待修的 bug**，不是"已知无害的例外"
+- [ ] 有没有 effect 在 `setState` 改自己依赖的值？（无限循环的典型来源）
+
 
 ---
 
 ## 3. useRef
 
+> ### ⚠️ 先排除命名干扰：React 的 `useRef` ≠ Vue 的 `ref()`
+>
+> A2 第 3 节列过 `ref` 的三重含义，这里再强调一次，因为这一节整节都在讲 `useRef`，混淆的代价最大：
+>
+> | 语境 | 是什么 | 改它会怎样 |
+> |---|---|---|
+> | Vue `ref(0)` | **响应式状态** | 视图更新 |
+> | Vue 模板 `ref="el"` | DOM 引用 | 不影响视图 |
+> | React `useState` | 状态 | **触发重渲染** |
+> | React `useRef` | **可变容器 + DOM 引用** | **不触发重渲染** |
+>
+> 所以：**React 的 `useRef` 语义上更接近 Vue 的模板 `ref`，而不是 Vue 的 `ref()`。** 名字撞车纯属巧合（React 的 `useRef` 早于 Vue 3 的 `ref()`）。
+>
+> **一句话判据**：这个值变了，界面需要跟着变吗？
+> - 需要 → `useState`（Vue 的 `ref()`）
+> - 不需要（只用来记账、存 DOM、存定时器 id）→ `useRef`（Vue 的模板 ref）
+>
+> 这个判断每次用之前都过一遍。**"改了 `useRef` 但界面不动"是 Vue 转 React 最常见的困惑之一**，而且它不报错，只会让你怀疑自己是不是哪里写错了。
+
 ```jsx
 const ref = useRef(initialValue)
 // ref.current 可读写，改它不触发重渲染
 ```
+
+它与 §2 讲的**引用稳定性**是同一个机制的两面：正因为 ref 对象的引用跨渲染不变（只换 `.current`），它才能用来穿透闭包陷阱（§2 解法 4）；也正因为改 `.current` 不参与 React 的变更检测，它才不能用来存"需要驱动界面"的数据。
 
 三个用途，**分清它们**：
 
@@ -270,6 +310,59 @@ function filterReducer(state: FilterState, action: FilterAction): FilterState {
 ---
 
 ## 5. 性能优化：先测量，再动手
+
+### 与 Vue 的根本差异：React 默认不做细粒度更新 ⭐
+
+这一节和后面所有优化手段，都由一个差异决定。**先把它说清楚，否则你会觉得 React 的性能模型莫名其妙。**
+
+Vue：
+
+```vue
+<template>
+  <div>
+    <p>标题：{{ title }}</p>       <!-- title 变 → 只有这个 p 更新 -->
+    <ExpensiveChart />              <!-- 不受影响 -->
+  </div>
+</template>
+```
+
+Vue 的 Proxy 知道**哪个组件模板读了哪个字段**。`title` 变 → 只有读了 `title` 的部分重新渲染，`ExpensiveChart` 完全不参与。**你什么都不用做。**
+
+React：
+
+```jsx
+function Page({ title }) {
+  return (
+    <div>
+      <p>标题：{title}</p>           {/* title 变 */}
+      <ExpensiveChart />              {/* 也跟着重渲染！ */}
+    </div>
+  )
+}
+```
+
+`Page` 的 props/state 一变 → **整个 `Page` 函数重跑**（A2 规则 2）→ `ExpensiveChart` 的 JSX 被重新创建 → 它也跟着重渲染。React 默认**不知道**哪部分用到了哪个数据。
+
+**所以 `memo` / `useMemo` / `useCallback` 这一整套工具的本质，是在手动补上 Vue 由 Proxy 自动提供的信息。** 它们在 Vue 里的对应物（`v-memo` 之类）你几乎从不需要主动用。这就是为什么 React 教程里性能优化占这么大篇幅，而 Vue 教程里几乎没有——不是 React 性能差，是**优化的责任被转移给了开发者**。
+
+### 为什么 React 不这么做
+
+不是做不到，是取舍：
+
+| | Vue（Proxy 追踪） | React（重跑 + diff） |
+|---|---|---|
+| 更新粒度 | 精确到读了该数据的组件 | 整个组件子树 |
+| 你要写多少优化代码 | 几乎为零 | 需要时手动加 `memo` / `useMemo` |
+| 心智负担 | 低，但对"为什么更新"难追踪 | 高，但数据流完全显式、可预测 |
+| 依赖什么 | 运行时 Proxy | 纯函数计算，**可中断、可重放** |
+
+React 的选择是为**可中断渲染**（并发特性、时间切片、Suspense）服务的——这正是 A2 规则 3 那个"快照语义"的同一个根源。代价是复杂度和优化责任落在你身上。
+
+**对你的三条实际影响：**
+
+1. **默认写好，别默认优化。** 大多数界面性能是够的。这一节的核心是"先测量"。
+2. **优化的对象是"重渲染范围"，不是"哪个字段变了"。** 所以手段是隔离组件边界（`memo`、状态下移、`children` 传递），而不是精确订阅某个数据。
+3. **`useCallback` / `useMemo` 在 React 里的必要性远高于 Vue 里的对应物——但只在配合 `memo` 时才有意义。** 孤立的 `useCallback` 什么都没优化，只是多了一层闭包和依赖数组，而且漏依赖会引入 bug（§2 变体 1 讲过）。
 
 ### 心智模型：重渲染不等于重绘 DOM
 
@@ -425,6 +518,58 @@ A2 学的拆组件是**复用 UI**。但很多要复用的是**逻辑**——比
 
 这些逻辑放进组件里就没法复用了。自定义 hook 解决这个。
 
+### 与 composable 的关键差异 ⭐
+
+你熟悉 composables（`useXxx` 返回状态和方法的函数）。React 的自定义 hook 长得几乎一样，但有**一个致命差异**：
+
+| | Vue composable | React 自定义 hook |
+|---|---|---|
+| 执行次数 | **每个组件实例调用一次**（在 setup 里） | **每次渲染都执行** |
+| 内部的普通变量 | 持久保存 | **每次重置** |
+| 内部的状态 | `ref()` / `reactive()` | `useState` / `useRef` |
+| 返回值 | 响应式的（`ref` 解包后仍是活的） | **当次渲染的快照值** |
+
+**具体后果**：
+
+```js
+// Vue composable：跨调用持久
+export function useCounter() {
+  let count = 0                    // ✅ 这个变量会一直存在
+  const increment = () => count++
+  return { count, increment }
+}
+```
+
+```jsx
+// React hook：每次渲染都重置
+export function useCounter() {
+  let count = 0                    // ❌ 每次都归零
+  const increment = () => count++
+  return { count, increment }
+}
+```
+
+React 版本必须用 `useState`（不需要驱动界面时才用 `useRef`）来跨渲染保存：
+
+```jsx
+export function useCounter() {
+  const [count, setCount] = useState(0)
+  const increment = () => setCount(c => c + 1)   // 函数式更新，避免快照问题
+  return { count, increment }
+}
+```
+
+**这是 A2 规则 2 在 hook 上的延伸。** Vue 的 composable 只在 setup 里跑一次，所以可以在里面做一次性初始化、注册监听器、存普通变量；React 的 hook 每次渲染都跑，所有跨渲染的东西都必须放进 `useState` / `useRef`。
+
+**两个你很容易犯的错**：
+
+1. **在 hook 里存普通变量**（以为像 composable 一样会持久）——不报错，只是值永远不对
+2. **在 hook 顶部直接做副作用**（发请求、订阅事件）——Vue 的 composable 里这么做**成立**（跑一次），React 里必须包进 `useEffect`，否则每次渲染都发一次请求
+
+`useDebounce` 那个例子就是第 2 点的体现：它内部的 `setTimeout` 必须放在 `useEffect` 里，不能直接写在 hook 顶部。
+
+**记忆锚点：composable ≈ setup（跑一次），React hook ≈ render（跑 N 次）。名字像，执行模型完全不同。**
+
 ### 规则
 
 ```jsx
@@ -507,7 +652,7 @@ useEffect(() => {
 }, [debouncedQuery])      // 只在停止输入 300ms 后触发
 ```
 
-比 A2 练习 3 把防抖写在搜索 effect 里更清晰——**关注点分离**：一个 hook 管防抖，一个 effect 管搜索。
+比 A2 第 8 节那个把防抖直接写在搜索 effect 里的 `PoemSearch` 更清晰——**关注点分离**：一个 hook 管防抖，一个 effect 管搜索。
 
 ### 什么时候该抽 hook
 
@@ -530,6 +675,41 @@ Context 解决的是 **prop drilling**（层层传递 props）问题，**不是�
 - 全局配置
 
 **不适合**：频繁变化的状态。原因见下。
+
+### 与 `provide/inject` 的差异 ⭐
+
+Context 在概念上就是 `provide` / `inject`：祖先提供，任意深度的后代消费，中间层不用转发 props。
+
+差异在**更新粒度**：
+
+| | Vue `provide` / `inject` | React `Context` |
+|---|---|---|
+| 谁重新渲染 | 只有**读了变化字段**的组件 | **所有** `useContext` 消费者 |
+| 追踪依据 | 精确到属性（Proxy） | 整个 value 对象的引用 |
+| 拆分手段 | 通常不需要 | 需要，见下面的纪律 |
+
+```jsx
+<ThemeContext.Provider value={{ theme, user, filters }}>
+  <DeepChild />        {/* 只用了 theme，但 user 或 filters 变它也会重渲染 */}
+</ThemeContext.Provider>
+```
+
+Vue 里 `inject` 出来的响应式对象只在被读的字段变化时触发更新；React 里 Context 的 value **引用一变，所有消费者无条件重渲染**。而且 `value={{ ... }}` 每次渲染都是新对象，即使内容完全没变也会触发——**这是最常被忽略的一个坑**，必须用 `useMemo` 包住或把 value 拆开。
+
+所以 React 里用 Context 有两条纪律：
+
+1. **value 里别塞无关的东西**。拆成多个 Context（主题 / 用户 / 筛选各一个）。
+2. **把高频变化的值和稳定的 `dispatch` 分开**。`dispatch` 的引用永远稳定，所以"只需要 dispatch"的组件（各种按钮）不会因为筛选条件变化而重渲染。
+
+```jsx
+<FiltersContext value={filters}>
+  <DispatchContext value={dispatch}>      {/* dispatch 稳定，这个 Provider 不引起额外渲染 */}
+    {children}
+  </DispatchContext>
+</FiltersContext>
+```
+
+原因还是同一个：**React 没有 Proxy，无法知道消费者读了 value 里的哪个字段**，只能对整个 value 做引用比较。这和第 5 节"React 不做细粒度更新"是同一件事在 Context 上的表现。
 
 ### Context 的性能陷阱
 
@@ -598,6 +778,28 @@ const DispatchContext = createContext()     // 永远不变（dispatch 引用稳
 | 详情页数据 | 组件局部 state 或 URL |
 
 **结论：这个项目大概率不需要 Redux / Zustand。**
+
+### 别按 Vue 的习惯装库：React 没有 Pinia 的对等物
+
+这一条要单独对你说，因为它是最容易踩的生态习惯差异。
+
+Vue 生态里"上 Pinia"几乎是默认动作——`createPinia()`、`defineStore`、到处 `useXxxStore()`。React 生态**没有这个默认动作**：
+
+| | Vue / Pinia | React |
+|---|---|---|
+| 全局 store 的地位 | 生态标配，官方推荐 | **没有官方方案**，Redux 是第三方的 |
+| 不装库时的替代手段 | 组件状态 + `provide/inject` | 组件状态 + **状态提升** + Context，覆盖面大得多 |
+| 引入的心理门槛 | 低，几十行就能建一个 store | 应该更高：Redux / Zustand / Jotai 取舍各不相同 |
+
+关键在第二行：**Vue 里那些"该上 Pinia"的场景，在 React 里往往状态提升 + Context 就够了。**
+
+具体到诗词站：你可能会本能地想给"收藏夹"建一个 store（就像 Vue 里建 `useFavoriteStore`）。但收藏夹是**低频变化**的状态（用户点一下才变一次），Context + localStorage 完全够用，而且更好调试。真正的痛点通常出现在"跨多个路由共享、多棵不相关组件树都要读写、且高频更新"——诗词站很少有这种状态。
+
+**判断要不要装库，先问这三个问题**：
+
+1. 这份状态被几棵**互不相关**的组件树读写？（1–2 棵 → 状态提升或 Context）
+2. 它变化**频繁**吗？（频繁时 Context 确实有性能问题，但状态管理库未必是答案，先考虑状态下移或放进 URL）
+3. 你试过不装库吗？**没试过就别装。**
 
 一个更好的思路：**把筛选和搜索状态放进 URL**。
 
@@ -854,13 +1056,15 @@ useEffect(() => {
 
 ### 练习 3：useReducer 重构筛选器 · 3–4h
 
-把 A2 练习 2/3 的多个 `useState` 换成 `useReducer`：
+A2 的练习 2 和练习 3 各自只存了一个筛选状态（朝代过滤、搜索关键词）。这一步把它们**合并成一个多字段的筛选状态**，并新增几个字段，改用 `useReducer` 管理——这正是第 4 节说的"多个 state 总是一起变"的场景：
 
 - [ ] 状态包含：朝代、体裁、关键词、排序方式、每页条数
 - [ ] action 至少包含：各项 SET、RESET、以及一个组合 action（比如"切换到'唐诗精选'预设"）
-- [ ] 用可辨识联合定义 action 类型
+- [ ] 用可辨识联合定义 action 类型，传错 `type` 或漏 `payload` 要编译报错
 - [ ] **reducer 是纯函数，写至少 5 个单元测试**（不需要 React，直接测函数）
 - [ ] 派生值（筛选后的列表）用 `useMemo`
+- [ ] 迁移完对比一下：原来的 `useState` 版本和 reducer 版本，哪个更容易加新字段、哪个更容易测
+
 
 ### 练习 4：性能测量与优化 · 4–6h
 
@@ -937,6 +1141,13 @@ Phase A 的最终产出。把 A2 + A3 的所有东西整合成一个完整的诗
 - [ ] StrictMode 双调用的目的，以及为什么不该关掉它
 - [ ] 为什么 React 19 仍然需要 class 组件写错误边界
 
+**能对照 Vue**（这是本关对你真正的验收重点）：
+- [ ] 说清 React 默认不做细粒度更新的**原因**（可中断渲染），以及这如何决定了 `memo` / `useMemo` / `useCallback` 这一整套工具的存在意义
+- [ ] 说清闭包陷阱为什么在 Vue 里不存在（可变引用 vs 常量快照），以及 React 为此付出的代价
+- [ ] 说清自定义 hook 和 composable 的**执行次数差异**，并举一个"把 composable 写法直接搬过来会出错"的例子
+- [ ] 说清 Context 与 `provide/inject` 在更新粒度上的差异，以及为什么 Context 的 value 要拆开或 `useMemo`
+- [ ] 说清 `useRef` 与 Vue `ref()` 的语义差别，以及一句话判据
+
 **能测量**：
 - [ ] 会用 React DevTools Profiler，能回答"为什么这个组件渲染了"
 - [ ] 有练习 4 的实测数据表
@@ -945,7 +1156,8 @@ Phase A 的最终产出。把 A2 + A3 的所有东西整合成一个完整的诗
 **能判断**：
 - [ ] 给一段代码，能判断该用 `useState` / `useReducer` / `useRef` 里的哪个
 - [ ] 能判断一个 `useEffect` 是否必要（该不该在渲染中直接算）
-- [ ] 能判断什么时候该引入状态管理库（答案通常是"还没到"）
+- [ ] 能判断什么时候该引入状态管理库（答案通常是"还没到"），并说出**为什么 React 里这个门槛比 Vue 里高**
+
 
 ---
 
@@ -961,7 +1173,7 @@ react.dev 的 **Reference** 部分（A2 读的是 Learn，这次读 Reference）
 | `useRef` | 第 3 节 |
 | `useMemo` / `useCallback` | 第 5 节 |
 | `memo` | 第 5 节 |
-| `useEffectEvent` | 第 2 节解法 3（注意页面标注 experimental） |
+| `useEffectEvent` | 解法正文在 A2 第 5 节；第 2 节讲它的底层原理（注意页面标注 experimental） |
 | `use` | 第 8 节 |
 | `useOptimistic` / `useActionState` | 第 8 节 |
 | `Activity` | 第 8 节 |
@@ -988,6 +1200,7 @@ Learn 部分补读：
 
 - View Transitions in React 相关文章 —— **你的包里没这个 API**（第 8 节）
 - Redux 教程 —— 这个项目用不上（第 7 节）
+- **Pinia 的 React "替代品"** —— React 没有官方对等物，别按 Vue 习惯直接找一个装上。先按第 7 节的三个问题判断要不要装库
 - React 18 → 19 迁移指南 —— 你是新项目，没有迁移需求
 - Server Components 相关内容 —— Phase B2 才学，现在看会混淆（A3 全程在纯客户端 React 环境）
 
